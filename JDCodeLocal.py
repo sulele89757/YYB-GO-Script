@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # name: 京东小程序Code本地版
-# cron: 0 */2 * * *
+# cron: 0 */3 * * *
 """
 京东小程序 code 登录，直接写入青龙本地数据库（不走 OpenAPI，无需 QL_URL/QL_CLIENT_ID/QL_CLIENT_SECRET）。
 
@@ -698,6 +698,71 @@ def jd_pt_html_redirect(base_url: str, raw: str) -> str:
     return ""
 
 
+WQ_PT_RETURN_URL = "https://home.m.jd.com/myJd/newhome.action?sceneval=2&ufc="
+WQ_PT_BRIDGE_HOSTS = ("wq.jd.com", "wqlogin2.jd.com")
+
+
+def jar_map(jar: CookieJar) -> Dict[str, str]:
+    return {item.name: str(item.value or "") for item in jar if item.name}
+
+
+def has_wq_session(jar: CookieJar) -> bool:
+    """login_lt 成功后会种下 wq 域登录态（pin + sfstoken + wq_uin）。"""
+    names = set(jar_map(jar))
+    return bool({"sfstoken", "wq_uin"} & names) and bool({"pin", "jdpin"} & names)
+
+
+def wq_to_pt_cookie(opener: CookieOpener) -> str:
+    """用 login_lt 建立的 wq 登录态，经通行证桥接换取 pt_key/pt_pin。
+
+    login_lt 只下发 wq.jd.com 域的会话，不含 passport 态。
+    标准换取方式是带着 wq cookie 请求 /passport/LoginRedirect，
+    由京东通行证在 .jd.com 域上签发 pt_key/pt_pin。
+    """
+    if not has_wq_session(opener.cookie_jar):
+        return ""
+    headers = dict(login_headers())
+    headers["Accept"] = (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    )
+    headers.pop("Referer", None)
+
+    for host in WQ_PT_BRIDGE_HOSTS:
+        current = f"https://{host}/passport/LoginRedirect?" + urllib.parse.urlencode(
+            {
+                "state": str(int(time.time() * 1000)),
+                "returnurl": WQ_PT_RETURN_URL,
+                "source": "wq_passport",
+            }
+        )
+        last_status = 0
+        for _ in range(8):
+            if not jd_pt_allowed_redirect(current):
+                break
+            try:
+                last_status, response_headers, raw = request_text(
+                    "GET", current, headers=headers, opener=opener
+                )
+            except RuntimeError:
+                break
+            cookie = normalize_pt_cookie(opener.cookie_jar)
+            if not cookie:
+                cookie = cookie_from_headers(response_headers)
+            if cookie:
+                return cookie
+            location = (
+                response_headers.get("Location")
+                or response_headers.get("location")
+                or ""
+            )
+            if not location and last_status == 200:
+                location = jd_pt_html_redirect(current, raw)
+            if not location or last_status not in {200, 301, 302, 303, 307, 308}:
+                break
+            current = urllib.parse.urljoin(current, location)
+    return ""
+
+
 def jd_pt_cookie_login(code: str) -> str:
     session = CookieOpener()
     login_url = "https://plogin.m.jd.com/user/login.action?" + urllib.parse.urlencode(
@@ -762,6 +827,30 @@ def exchange_pt_cookie(account: Dict[str, str]) -> str:
     return jd_pt_cookie_login(pt_code)
 
 
+RISK_MARKER = "京东风控拒绝签发"
+# login_lt 明确拒签的业务码，重试与换 code 都无意义
+RISK_RET_CODES = {"202", "203", "600", "601"}
+
+
+def risk_reason(payload: Any) -> str:
+    """识别京东风控拒签。返回可读原因，非风控返回空串。"""
+    ret_code = nested_value(payload, ("retCode", "ret_code"))
+    ret_msg = nested_string(payload, ("retMsg", "ret_msg"))
+    code_text = "" if ret_code in (None, "") else str(ret_code).strip()
+    lowered = ret_msg.lower()
+    hit = code_text in RISK_RET_CODES or any(
+        word in lowered for word in ("risk", "风险", "风控", "forbidden", "limit")
+    )
+    if not hit:
+        return ""
+    parts = []
+    if code_text:
+        parts.append(f"retCode={code_text}")
+    if ret_msg:
+        parts.append(f"retMsg={ret_msg}")
+    return "；".join(parts) or "未知风控码"
+
+
 def attempt_code_login(account: Dict[str, str], full: bool = False) -> str:
     session = CookieOpener()
     code = get_yyb_code(account)
@@ -773,7 +862,22 @@ def attempt_code_login(account: Dict[str, str], full: bool = False) -> str:
     if not cookie:
         cookie = cookie_from_payload(payload)
     if not cookie:
+        # 京东已明确拒签，后续所有兜底都会失败，且高频重试会加重风控
+        reason = risk_reason(payload)
+        if reason:
+            cookies = jar_map(session.cookie_jar)
+            who = cookies.get("pin") or cookies.get("jdpin") or "?"
+            raise RuntimeError(
+                f"{RISK_MARKER} pt_key（账号 {who}，"
+                f"pinStatus={cookies.get('pinStatus', '?')}）：{reason}。"
+                "小程序静默登录已被京东识别但拒绝提升为通行证态，"
+                "需在微信京东购物小程序内手工完成一次登录并通过验证；"
+                "在此之前请暂停定时任务，反复重试只会加重风控"
+            )
+    if not cookie:
         cookie = follow_server_refresh(session, payload)
+    if not cookie:
+        cookie = wq_to_pt_cookie(session)
     if cookie:
         if COOKIE_MODE == "all":
             return all_cookie_text(session.cookie_jar)
@@ -790,8 +894,21 @@ def attempt_code_login(account: Dict[str, str], full: bool = False) -> str:
         if isinstance(payload, dict)
         else ""
     )
-    jar_fields = ",".join(sorted({item.name for item in session.cookie_jar}))
+    cookies = jar_map(session.cookie_jar)
+    jar_fields = ",".join(sorted(cookies))
     detail = []
+    ret_code = nested_value(payload, ("retCode", "ret_code"))
+    ret_msg = nested_string(payload, ("retMsg", "ret_msg"))
+    if ret_code not in (None, ""):
+        detail.append(f"retCode={ret_code}")
+    if ret_msg:
+        detail.append(f"retMsg={ret_msg}")
+    if has_wq_session(session.cookie_jar):
+        detail.append(
+            "已建立 wq 登录态（pin="
+            + (cookies.get("pin") or cookies.get("jdpin") or "?")
+            + f"，pinStatus={cookies.get('pinStatus', '?')}）但通行证桥接未签发 pt_key"
+        )
     if payload_fields:
         detail.append("响应字段=" + payload_fields)
     if jar_fields:
@@ -814,7 +931,13 @@ def login_via_code(account: Dict[str, str]) -> str:
     try:
         return attempt_code_login(account, full=False)
     except Exception as code_error:
-        if "登录缓存已过期" in str(code_error) or "login_buffer expired" in str(code_error):
+        text = str(code_error)
+        # 风控拒签 / 缓存过期：换 code 重试无用，直接抛出
+        if (
+            RISK_MARKER in text
+            or "登录缓存已过期" in text
+            or "login_buffer expired" in text
+        ):
             raise
         print(f"  code-only 未完成登录，改用全参数新 code：{code_error}")
         return attempt_code_login(account, full=True)
