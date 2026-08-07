@@ -12,8 +12,7 @@ function buildServers() {
         console.error("未配置环境变量 YYB_SERVER，请设置后重试（格式：地址@微信账号标识，多行换行）");
         process.exit(1);
     }
-    console.log("YYB_SERVER 原始内容(前200字): " + raw.slice(0, 200).replace(/\r/g, "").replace(/\n/g, "\\n"));
-    return raw
+    const servers = raw
         .split(/\r?\n/)
         .map(s => String(s).trim())
         .filter(Boolean)
@@ -28,6 +27,8 @@ function buildServers() {
             }
             return true;
         });
+    console.log(`YYB_SERVER 共加载 ${servers.length} 个账号`);
+    return servers;
 }
 const SERVERS = buildServers();
 if (!SERVERS.length) {
@@ -44,16 +45,15 @@ function parseYybGoEntry(rawValue) {
     }
     let server = value.slice(0, atIndex).trim();
     const ref = value.slice(atIndex + 1).trim();
-    if (server.startsWith("http://")) server = server.slice(7);
-    else if (server.startsWith("https://")) server = server.slice(8);
     server = server.replace(/\/+$/, "");
+    if (server && !/^https?:\/\//i.test(server)) server = `http://${server}`;
     if (!server || !ref) return { server: "", ref: "" };
     return { server, ref };
 }
 async function getCode(server) {
     const { server: parsedServer, ref } = parseYybGoEntry(server);
     if (!parsedServer || !ref) return null;
-    const url = "http://" + parsedServer + "/wxapp/getCode";
+    const url = parsedServer + "/wxapp/getCode";
     try {
         const { data } = await axios.post(url, { ref, app_id: MINI_APP_ID }, { timeout: 20000, proxy: false });
         const code = data && data.data && data.data.result && data.data.result.code;
@@ -73,8 +73,9 @@ let userIdx = 1;
 
 const MINI_APP_ID = "wx50282644351869da";
 const PAGE_VERSION = "506";
-const API_VERSION = "v1_25_0";
-const APP_VERSION = "1.25.0";
+const API_VERSION = "v2_1_0";
+const APP_VERSION = "2.1.0";
+const THIRD_TYPE = "WX_APPLET";
 const CHANNEL = "C2";
 const BU_CODE = "C20400";
 const BASE_HOST = "https://gw2c-hw-open.longfor.com/supera";
@@ -350,7 +351,9 @@ function ok(code) {
 }
 
 function tokenError(error) {
-    return /token|登录|授权|未登录|801007|900005|900006/i.test(String(error?.message || error));
+    const code = String(error?.code || "");
+    if (["801001", "801007", "900005", "900006"].includes(code)) return true;
+    return /登录已过期|未登录|请重新登录|授权(?:已)?(?:失效|过期)|lmToken/i.test(String(error?.message || error));
 }
 
 class Task {
@@ -451,6 +454,21 @@ class Task {
         return result.data;
     }
 
+    async miniGet(url, member = false) {
+        const { data: result, status } = await axios.get(url, {
+            headers: this.miniHeaders(null, member),
+            timeout: 20000,
+            validateStatus: () => true,
+        });
+        if (status !== 200) throw new Error(`HTTP ${status}: ${JSON.stringify(result)}`);
+        if (!ok(result?.code)) {
+            const err = new Error(result?.msg || result?.message || JSON.stringify(result));
+            err.code = result?.code;
+            throw err;
+        }
+        return result.data;
+    }
+
     async taskPost(pathname, data, dxToken = "") {
         const { data: result, status } = await axios.post(`${TASK_HOST}${pathname}`, data, {
             headers: this.taskHeaders(dxToken),
@@ -468,23 +486,36 @@ class Task {
     }
 
     async loginByWxCode() {
-        const code = await this.getLoginCode();
-        if (!code) {
+        const fingerprint = await getDxToken();
+        const checkCode = await this.getLoginCode();
+        if (!checkCode) {
             throw new Error(`获取微信code失败：请检查 YYB_SERVER 中该账号在 YYB Go 是否已绑定龙湖天街小程序（appId ${MINI_APP_ID}）`);
         }
         const checkData = {
             appId: MINI_APP_ID,
-            thirdType: "WX_APPLET",
-            fingerprint: "",
-            authCode: code,
+            thirdType: THIRD_TYPE,
+            fingerprint,
+            authCode: checkCode,
         };
         const check = await this.miniPost(`${BASE_HOST}/mine/${API_VERSION}/publicApi/login/checkLoginType`, checkData);
+        if (process.env.LHTJ_LOGIN_DEBUG === "1") {
+            const summary = Object.fromEntries(Object.entries(check || {}).map(([key, value]) => [
+                key,
+                typeof value === "string" ? `<string:${value.length}>` : value,
+            ]));
+            console.log(`账号[${this.index}] 登录校验响应结构: ${JSON.stringify(summary)}`);
+        }
+        if (check?.isNew && !check?.maskPhone) {
+            throw new Error("该微信账号尚未注册龙湖会员，请先在微信中打开龙湖天街小程序并授权手机号，再运行脚本");
+        }
+        const loginCode = await this.getLoginCode();
+        if (!loginCode) throw new Error("登录前获取第二次微信code失败");
         const loginData = {
             appId: MINI_APP_ID,
-            authCode: code,
-            isNew: false,
-            thirdType: "WX_APPLET",
-            fingerprint: "",
+            authCode: loginCode,
+            isNew: Boolean(check?.isNew),
+            thirdType: THIRD_TYPE,
+            fingerprint,
             ticket: check?.ticket || "",
         };
         const login = await this.miniPost(`${BASE_HOST}/mine/${API_VERSION}/publicApi/login/loginByMiniApp`, loginData);
@@ -510,10 +541,11 @@ class Task {
 
     async checkToken() {
         try {
-            await this.getPageConfig();
+            await this.miniGet(`${MEMBER_HOST}/api/bff/pages/${API_VERSION}/v1/user-info`, true);
             return true;
         } catch (e) {
-            return false;
+            if (tokenError(e)) return false;
+            throw e;
         }
     }
 
@@ -576,8 +608,19 @@ class Task {
         try {
             await this.signIn();
         } catch (e) {
-            console.log(`账号[${this.index}] 签到失败${e.code ? `(${e.code})` : ""}: ${e.message || e}`);
-            if (tokenError(e)) this.removeCachedToken();
+            if (!tokenError(e)) {
+                console.log(`账号[${this.index}] 签到失败${e.code ? `(${e.code})` : ""}: ${e.message || e}`);
+                return;
+            }
+            this.removeCachedToken();
+            console.log(`账号[${this.index}] 登录已过期，获取新 code 后重试一次`);
+            try {
+                await this.loginByWxCode();
+                await this.signIn();
+            } catch (retryError) {
+                if (tokenError(retryError)) this.removeCachedToken();
+                console.log(`账号[${this.index}] 重登后仍失败${retryError.code ? `(${retryError.code})` : ""}: ${retryError.message || retryError}`);
+            }
         }
     }
 }

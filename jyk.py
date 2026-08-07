@@ -26,8 +26,20 @@ BASE_URL = "https://jyk.scjyx.com"
 PAYCONFIG_ID = "2"
 
 # YYB server from env (YYB-GO standard)
-YYB_WX_SERVER = os.environ.get("YYB_SERVER", "").strip().rstrip("/")
+YYB_WX_SERVER = ""
 YYB_REFS: List[str] = []  # Empty means auto fetch all refs from YYB /accounts.
+for entry in os.environ.get("YYB_SERVER", "").splitlines():
+    entry = entry.strip()
+    if not entry:
+        continue
+    server, separator, ref = entry.rpartition("@")
+    if not separator:
+        server = entry
+    server = server.strip().rstrip("/")
+    if not YYB_WX_SERVER:
+        YYB_WX_SERVER = server
+    if separator and server == YYB_WX_SERVER and ref.strip():
+        YYB_REFS.append(ref.strip())
 
 MANUAL_ACCESS_TOKENS: List[str] = []
 

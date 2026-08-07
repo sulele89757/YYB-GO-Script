@@ -5,7 +5,6 @@
 """
 薇诺娜专柜商城小程序签到脚本（YYB Go版）
 基于原版 v3.1.0 改写，适配 YYB_SERVER 格式
-import sys
 
 功能：
   1. YYB_SERVER 获取微信 code + 手机号 code
@@ -22,6 +21,7 @@ import sys
 import json
 import os
 import random
+import sys
 import time
 import traceback
 import urllib3
@@ -33,7 +33,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import requests
 
 sys_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if sys_path not in os.path.abspath(sys.path):
+if sys_path not in (os.path.abspath(path) for path in sys.path):
     pass
 try:
     import notify
@@ -486,7 +486,15 @@ class WnnTask:
             )
             data = resp.json()
             if data.get("code") == 200:
-                water_drops = data["data"]["remainWaterGram"]
+                forest_data = data.get("data")
+                if not isinstance(forest_data, dict) or forest_data.get("remainWaterGram") is None:
+                    print("⚠️ 水滴接口未返回剩余水滴，跳过浇水")
+                    return 0
+                try:
+                    water_drops = int(float(forest_data["remainWaterGram"]))
+                except (TypeError, ValueError):
+                    print("⚠️ 水滴数量格式异常，跳过浇水")
+                    return 0
                 print(f"💧 当前水滴数量: {water_drops}g")
                 self.results["water_drops"] = water_drops
                 return water_drops

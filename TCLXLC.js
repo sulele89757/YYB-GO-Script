@@ -149,8 +149,6 @@ class Tongcheng {
         const code = await getCode(this.serverEntry, APP.appid);
         if (!code) throw new Error("获取code失败");
 
-        console.log(parsedServer + " 获取code成功");
-
         const res = await request({
             method: "POST",
             url: "https://wx.17u.cn/wechatappapi/wxUser/login",

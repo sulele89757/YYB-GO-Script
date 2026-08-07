@@ -27,8 +27,7 @@ if env_YYB_SERVER:
 # 校验是否存在有效服务地址
 if len(SERVERS) == 0:
     print("❌ 未配置环境变量 YYB_SERVER")
-print("格式：地址@微信账号标识，多账号换行分隔")
-    print("192.168.31.111:8088")
+    print("格式：yyb-go:8000@账号ID或OpenID，多账号换行分隔")
     exit(1)
 
 print(f"✅ 读取到 {len(SERVERS)} 个 YYB Go 账号")
@@ -263,8 +262,9 @@ def wxLogin(jsCode, UA, proxies, server):
         else:
             response = requests.post(login_url, json=payload, headers=headers, proxies={}, timeout=20)
         
-        print(f"[{server}] 登录接口返回：{response.text[:300]}")
-        return response.json()
+        data = response.json()
+        print(f"[{server}] 登录接口返回：code={data.get('code')}, msg={data.get('msg', '-')}")
+        return data
     except Exception as e:
         print(f"❌ [{server}] 登录异常: {str(e)[:60]}")
         return None

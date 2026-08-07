@@ -55,10 +55,7 @@ if env_YYB_SERVER:
 # 无有效地址直接退出
 if len(SERVERS) == 0:
     print("❌ 未配置环境变量 YYB_SERVER")
-print("格式：地址@微信账号标识，多账号换行分隔")
-    print("192.168.31.36:8088")
-    print("192.168.31.88:8088")
-    print("192.168.31.62:8088")
+    print("格式：yyb-go:8000@账号ID或OpenID，多账号换行分隔")
     exit(1)
 
 print(f"✅ 读取到 {len(SERVERS)} 个 YYB Go 账号")
@@ -590,7 +587,10 @@ def run_account(index: int, total: int, server: str) -> Dict[str, Any]:
             print(f"⚠️ [签到] {result['signMsg']}")
 
         lottery_info = api_get(server, LOTTERY_INFO_URL, token, proxies)
-        member_count = int(lottery_info.get("data", {}).get("member_count", 0) or 0)
+        lottery_data = lottery_info.get("data")
+        if not isinstance(lottery_data, dict):
+            lottery_data = {}
+        member_count = int(lottery_data.get("member_count", 0) or 0)
         print(f"🎰 [抽奖] 当前可抽奖 {member_count} 次")
 
         prize_list: List[str] = []
@@ -623,7 +623,10 @@ def run_account(index: int, total: int, server: str) -> Dict[str, Any]:
         result["lotteryMsg"] = "、".join(prize_list) if prize_list else f"{member_count} 次机会"
 
         account_resp = api_get(server, ACCOUNT_DETAIL_URL, token, proxies)
-        total_raw = account_resp.get("data", {}).get("total", 0)
+        account_data = account_resp.get("data")
+        if not isinstance(account_data, dict):
+            account_data = {}
+        total_raw = account_data.get("total", 0)
         total = to_float(total_raw)
 
         result["balance"] = str(total_raw)

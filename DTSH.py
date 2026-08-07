@@ -29,8 +29,7 @@ if env_YYB_SERVER:
 # 校验是否存在有效服务地址
 if len(CODE_URL_LIST) == 0:
     print("❌ 未配置环境变量 YYB_SERVER")
-print("格式：地址@微信账号标识，多账号换行分隔")
-    print("http://192.168.1.7:8088/login")
+    print("格式：yyb-go:8000@账号ID或OpenID，多账号换行分隔")
     exit(1)
 
 print(f"✅ 读取到 {len(CODE_URL_LIST)} 个 YYB Go 账号")
@@ -405,7 +404,19 @@ def do_sign(token, headers, proxy_config, account_name):
                 verify=False
             )
 
-        return res.json()
+        data = res.json()
+        # 部分节点会把 JSON 对象再包一层字符串，统一解析为字典。
+        for _ in range(2):
+            if not isinstance(data, str):
+                break
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                return {"msg": data, "data": {}}
+
+        if isinstance(data, dict):
+            return data
+        return {"msg": str(data), "data": {}}
     except Exception as e:
         print(f"❌ 签到异常：{str(e)}")
         return None
@@ -452,8 +463,11 @@ def run_account(code_url, index, global_proxy_config):
             }
 
         sign_msg = data.get("msg", "完成")
-        get_points = data.get("data", {}).get("points", 0)
-        sign_num = data.get("data", {}).get("sign_num", 0)
+        sign_data = data.get("data")
+        if not isinstance(sign_data, dict):
+            sign_data = {}
+        get_points = sign_data.get("points", 0)
+        sign_num = sign_data.get("sign_num", 0)
 
         # 获取用户信息
         nickname, uid, total_points = get_user_info(token, headers, proxy_config, account_name)

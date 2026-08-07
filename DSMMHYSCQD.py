@@ -34,9 +34,7 @@ SERVERS = [
 
 if not SERVERS:
     print("❌ 未配置环境变量 YYB_SERVER")
-print("格式：地址@微信账号标识，多账号换行分隔")
-    print("  或")
-    print("  YYB_SERVER=127.0.0.1:8088\\n192.168.31.36:8088\\n192.168.31.88:8088")
+    print("格式：yyb-go:8000@账号ID或OpenID，多账号换行分隔")
     exit(1)
 
 PLUSPLUS_TOKEN = os.getenv("PLUSPLUS_TOKEN", "")
@@ -487,6 +485,7 @@ def run_account(index: int, total: int, server: str) -> Dict[str, Any]:
 
     result["token"] = mask(token)
 
+    session_id = ""
     login_data = raw_login.get("data", {})
     if login_data:
         nickname = login_data.get("nickname") or login_data.get("nickName") or "未知用户"
@@ -523,10 +522,13 @@ def run_account(index: int, total: int, server: str) -> Dict[str, Any]:
         sign_resp = api_get(server, SIGN_URL, token, proxies, {
             "checkinId": CHECKIN_ID
         }, session_id)
+        sign_ok = False
         if sign_resp.get("code") == 0:
-            sign_data = sign_resp.get("data", {})
-            success = sign_data.get("success", False)
-            if success:
+            sign_data = sign_resp.get("data")
+            if not isinstance(sign_data, dict):
+                sign_data = {}
+            if sign_data.get("success", False):
+                sign_ok = True
                 reward_list = sign_data.get("list", [])
                 if reward_list:
                     reward = reward_list[0]
@@ -546,7 +548,9 @@ def run_account(index: int, total: int, server: str) -> Dict[str, Any]:
             result["signMsg"] = f"签到失败: {msg}"
             print(f"⚠️ [签到] {result['signMsg']}")
 
-        result["success"] = True
+        result["success"] = sign_ok
+        if not sign_ok:
+            result["error"] = result["signMsg"]
         return result
 
     except Exception as exc:

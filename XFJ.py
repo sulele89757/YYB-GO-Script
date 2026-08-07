@@ -33,7 +33,7 @@ if env_YYB_SERVER:
     raw_lines = env_YYB_SERVER.splitlines()
 else:
     print("❌ 未配置环境变量 YYB_SERVER")
-print("格式：地址@微信账号标识，多账号换行分隔")
+    print("格式：yyb-go:8000@账号ID或OpenID，多账号换行分隔")
     sys.exit(1)
 
 SERVERS = [l.strip() for l in raw_lines if l.strip() and "@" in l.strip()]

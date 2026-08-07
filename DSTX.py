@@ -49,10 +49,7 @@ if env_YYB_SERVER:
 # 无有效地址直接退出
 if len(SERVERS) == 0:
     print("❌ 未配置环境变量 YYB_SERVER")
-print("格式：地址@微信账号标识，多账号换行分隔")
-    print("192.168.31.36:8088")
-    print("192.168.31.88:8088")
-    print("192.168.31.62:8088")
+    print("格式：yyb-go:8000@账号ID或OpenID，多账号换行分隔")
     exit(1)
 
 print(f"✅ 读取到 {len(SERVERS)} 个 YYB Go 账号")
@@ -415,7 +412,16 @@ def extract_customer_uid(data) -> str | None:
 
 
 def extract_relogin_token(data) -> str | None:
-    values = find_values_by_key(data, {"reloginToken", "ReloginToken", "reLoginToken"})
+    values = find_values_by_key(
+        data,
+        {
+            "reloginToken",
+            "ReloginToken",
+            "reLoginToken",
+            "VISITORSESSION",
+            "visitorSession",
+        },
+    )
     for value in values:
         return str(value)
     return None
@@ -536,6 +542,8 @@ def find_login_info(
             "会员",
             f"识别成功 昵称={member_info['nickname']} | 积分={member_info['point']} | UID={mask_value(customer_uid)}",
         )
+    elif data.get("isLogin") is False:
+        log_warn("会员", "微信授权成功，但该微信尚未登录都市甜心会员")
     else:
         log_warn("会员", f"未识别会员：{json_preview(data)}")
 
@@ -726,7 +734,10 @@ def run_account(index: int, total: int, server: str) -> dict:
     store_id, customer_uid, visitor_uid, raw, member_info = login_by_code(server, proxies)
 
     if not store_id or not customer_uid or not visitor_uid:
-        result["error"] = f"登录识别失败，最后响应：{json_preview(raw, 800)}"
+        if isinstance(raw, dict) and raw.get("isLogin") is False:
+            result["error"] = "微信授权成功，但未登录都市甜心会员；请先在小程序同意隐私并完成会员注册/绑定"
+        else:
+            result["error"] = f"登录识别失败，最后响应：{json_preview(raw, 800)}"
         log_error("账号", result["error"])
         return result
 

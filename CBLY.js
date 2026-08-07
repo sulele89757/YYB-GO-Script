@@ -1,6 +1,7 @@
 // name: 臭宝乐园
 // cron: 40 16,4 * * *
 const axios = require("axios");
+const REQUEST_TIMEOUT_MS = 20000;
 // ====================== YYB Go 账号（环境变量 YYB_SERVER = 地址@微信账号标识，多行） ======================
 const SERVERS = (process.env.YYB_SERVER || "")
     .split(/\r?\n/)
@@ -64,21 +65,25 @@ class Task {
     }
 
     async run() {
-       //随机延迟5-30s 模拟人工操作
-       await await sleep(Math.floor(Math.random() * 20 + 5) * 1000);
-        let code = await getCode(this.server)
-        if (code) {
-            await this.getUserToken(code)
+        try {
+            // 随机延迟5-25s 模拟人工操作
+            await sleep(Math.floor(Math.random() * 20 + 5) * 1000);
+            const code = await getCode(this.server)
+            if (code) {
+                await this.getUserToken(code)
+            }
+            if (!this.token) {
+                console.log(`账号[${this.index}] 获取用户Token失败❌`)
+                return
+            }
+            this.token = 'Bearer' + this.token
+            await this.getUserInfo()
+            await this.track()
+            await this.checkSign()
+        } catch (error) {
+            const reason = error?.response?.data?.msg || error?.code || error?.message || String(error);
+            console.log(`账号[${this.index}] 请求失败: ${reason}❌`)
         }
-        if (!this.token) {
-            console.log(`账号[${this.index}] 获取用户Token失败❌`)
-            return
-        }
-        this.token = 'Bearer' + this.token
-        await this.getUserInfo()
-        await this.track()
-        await this.checkSign()
-        
     }
     async getUserToken(code) {
         let options = {
@@ -93,14 +98,15 @@ class Task {
             ,
             data: {
                 loginCode: code
-            }
+            },
+            timeout: REQUEST_TIMEOUT_MS
         }
         let {
             data: result
         } = await axios.request(options);
         if (result?.status == '200') {
             this.token = result.data
-            console.log(`🌸账号[${this.index}] 获取用户Token成功:${this.token}`)
+            console.log(`🌸账号[${this.index}] 获取用户Token成功`)
         } else {
             console.log(`🌸账号[${this.index}] 获取用户Token-失败:${result.msg}❌`)
         }
@@ -119,7 +125,8 @@ class Task {
                 "sec-fetch-mode": "cors",
                 "sec-fetch-site": "cross-site",
                 "user-agent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254173b) XWEB/19027'
-            }
+            },
+            timeout: REQUEST_TIMEOUT_MS
         }
         let {
             data: result
@@ -146,7 +153,8 @@ class Task {
                 "sec-fetch-site": "cross-site",
                 "user-agent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254173b) XWEB/19027'
             },
-            data: { "appletVersion": "2.0.31", "phoneSystem": "Windows Unknown x64", "phoneModel": "microsoft", "functionName": "签到", "module": "首页", "linkUrl": "pages/signIn/signIn", "secondPage": "" }
+            data: { "appletVersion": "2.0.31", "phoneSystem": "Windows Unknown x64", "phoneModel": "microsoft", "functionName": "签到", "module": "首页", "linkUrl": "pages/signIn/signIn", "secondPage": "" },
+            timeout: REQUEST_TIMEOUT_MS
         }
         await axios.request(options);
     }
@@ -167,7 +175,8 @@ class Task {
             },
             data: {
 
-            }
+            },
+            timeout: REQUEST_TIMEOUT_MS
         };
         let {
             data: result
@@ -176,7 +185,7 @@ class Task {
             //打印签到结果
             await this.signIn()
         } else {
-
+            console.log(`🌸账号[${this.index}] 签到状态查询失败:${result?.msg || '未知错误'}❌`)
         }
 
     }
@@ -197,7 +206,8 @@ class Task {
             },
             data: {
 
-            }
+            },
+            timeout: REQUEST_TIMEOUT_MS
         };
         let {
             data: result

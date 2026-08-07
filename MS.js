@@ -105,6 +105,7 @@ class Task {
         }
 
         await this.getUserInfo()
+        if (!this.customId) return
         await this.getJob()
         if (!this.isSigned) {
             await this.doSign()
@@ -174,8 +175,13 @@ class Task {
             let { data: result } = await axios.request(options)
 
             if (result?.msg === "success") {
-                this.valid = true;
-                this.customId = result?.data.resMemberInfo.memberId;
+                const memberInfo = result?.data?.memberInfo || result?.data?.resMemberInfo
+                this.customId = memberInfo?.memberId
+                this.valid = Boolean(this.customId)
+                if (!this.valid) {
+                    console.log(`账号[${this.index}] 查询个人信息失败：返回数据缺少 memberId`)
+                    return
+                }
                 console.log(`账号[${this.index}] 查询个人信息成功，积分：${result?.data?.memberInfo?.pointInfo?.point}`)
             } else {
                 console.log(`账号[${this.index}] 查询个人信息失败：${result?.msg || JSON.stringify(result)}`)
